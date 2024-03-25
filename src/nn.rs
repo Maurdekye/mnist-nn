@@ -8,7 +8,7 @@ use std::{
 use progress_observer::reprint;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
-pub type Precision = f32;
+pub type Precision = f64;
 
 #[derive(Serialize, Deserialize)]
 pub struct Model {
@@ -113,7 +113,10 @@ pub fn compute_gradient<A: ActivationFunction>(
         // gradient for weights
         let mut layer_weight_gradients = vec![0.0; model.weights[layer].len()];
         for weight in 0..layer_weight_gradients.len() {
-            reprint!("weight {:.2}%", (weight as f32 / layer_weight_gradients.len() as f32) * 100.0);
+            reprint!(
+                "layer {layer} weights {:.2}%",
+                (weight as f32 / layer_weight_gradients.len() as f32) * 100.0
+            );
             let original_weight = model.weights[layer][weight];
             model.weights[layer][weight] += epsilon;
             let nudged_error = batch_error::<A>(model, samples);
@@ -125,7 +128,10 @@ pub fn compute_gradient<A: ActivationFunction>(
         // gradient for biases
         let mut layer_bias_gradients = vec![0.0; model.biases[layer].len()];
         for bias in 0..layer_bias_gradients.len() {
-            reprint!("bias {:.2}%", (bias as f32 / layer_bias_gradients.len() as f32) * 100.0);
+            reprint!(
+                "layer {layer} biases {:.2}%",
+                (bias as f32 / layer_bias_gradients.len() as f32) * 100.0
+            );
             let original_bias = model.biases[layer][bias];
             model.biases[layer][bias] += epsilon;
             let nudged_error = batch_error::<A>(model, samples);
@@ -134,6 +140,7 @@ pub fn compute_gradient<A: ActivationFunction>(
         }
         gradient.biases.push(layer_bias_gradients);
     }
+    reprint!("");
     (base_error, gradient)
 }
 
@@ -144,13 +151,13 @@ pub fn apply_gradient<A: ActivationFunction>(
 ) {
     for (model_weights, gradient_weights) in model.weights.iter_mut().zip(gradient.weights) {
         for (model_weight, gradient_weight) in model_weights.iter_mut().zip(gradient_weights) {
-            *model_weight += gradient_weight * temperature;
+            *model_weight -= gradient_weight * temperature;
         }
     }
 
     for (model_biases, gradient_biases) in model.biases.iter_mut().zip(gradient.biases) {
         for (model_bias, gradient_bias) in model_biases.iter_mut().zip(gradient_biases) {
-            *model_bias += gradient_bias * temperature;
+            *model_bias -= gradient_bias * temperature;
         }
     }
 }
@@ -169,7 +176,7 @@ pub fn train<A: ActivationFunction>(
             .collect();
         let (loss, gradient) = compute_gradient::<A>(model, &batch, epsilon);
         apply_gradient::<A>(model, gradient, temperature);
-        print!("step {i}: loss {loss}");
+        println!("step {i}: loss {loss}");
     }
 }
 
@@ -189,28 +196,34 @@ pub fn load(filename: PathBuf) -> Result<Model, Box<dyn Error>> {
 
 pub trait ActivationFunction {
     fn activate(x: Precision) -> Precision;
+    fn derivative(x: Precision) -> Precision;
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct ReLu;
-impl ActivationFunction for ReLu {
-    fn activate(x: Precision) -> Precision {
-        x.max(0.0)
-    }
-}
+// #[derive(Serialize, Deserialize)]
+// pub struct ReLu;
+// impl ActivationFunction for ReLu {
+//     fn activate(x: Precision) -> Precision {
+//         x.max(0.0)
+//     }
+// }
 
-#[derive(Serialize, Deserialize)]
-pub struct LeakyReLu;
-impl ActivationFunction for LeakyReLu {
-    fn activate(x: Precision) -> Precision {
-        x.max(0.01 * x)
-    }
-}
+// #[derive(Serialize, Deserialize)]
+// pub struct LeakyReLu;
+// impl ActivationFunction for LeakyReLu {
+//     fn activate(x: Precision) -> Precision {
+//         x.max(0.01 * x)
+//     }
+// }
 
 #[derive(Serialize, Deserialize)]
 pub struct SiLu;
 impl ActivationFunction for SiLu {
     fn activate(x: Precision) -> Precision {
         x / (1.0 + (-x).exp())
+    }
+
+    fn derivative(x: Precision) -> Precision {
+        let x_exp = x.exp();
+        (x - 1.0) / (x_exp + 1.0) - (x / (x_exp + 1.0).powi(2)) + 1.0
     }
 }

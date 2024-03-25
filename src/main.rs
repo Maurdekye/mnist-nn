@@ -14,22 +14,20 @@ mod nn;
 
 use nn::*;
 
-fn load_mnist_images(path: PathBuf) -> Result<Vec<Vec<f32>>, Box<dyn Error>> {
+fn read_u32<R: Read>(reader: &mut R) -> Result<u32, Box<dyn Error>> {
+    let mut uint = [0; 4];
+    reader.read(&mut uint)?;
+    Ok(u32::from_be_bytes(uint))
+}
+
+fn load_mnist_images(path: PathBuf) -> Result<Vec<Vec<Precision>>, Box<dyn Error>> {
     let mut images = BufReader::new(File::open(path)?);
-    let mut magic_number = [0; 4];
-    images.read(&mut magic_number)?;
-    if u32::from_be_bytes(magic_number) != 0x00000803 {
+    if read_u32(&mut images)? != 0x00000803 {
         Err("Magic number does not match on images file")?;
     }
-    let mut num_items = [0; 4];
-    images.read(&mut num_items)?;
-    let num_items = u32::from_be_bytes(num_items);
-    let mut height = [0; 4];
-    images.read(&mut height)?;
-    let height = u32::from_be_bytes(height);
-    let mut width = [0; 4];
-    images.read(&mut width)?;
-    let width = u32::from_be_bytes(width);
+    let num_items = read_u32(&mut images)?;
+    let height = read_u32(&mut images)?;
+    let width = read_u32(&mut images)?;
 
     let mut image_samples = Vec::new();
     for _ in 0..num_items {
@@ -37,7 +35,7 @@ fn load_mnist_images(path: PathBuf) -> Result<Vec<Vec<f32>>, Box<dyn Error>> {
         images.read(&mut image)?;
         let sample = image
             .into_iter()
-            .map(|opacity| (opacity as f32) / 255.0)
+            .map(|opacity| (opacity as Precision) / 255.0)
             .collect();
         image_samples.push(sample);
     }
@@ -45,16 +43,12 @@ fn load_mnist_images(path: PathBuf) -> Result<Vec<Vec<f32>>, Box<dyn Error>> {
     Ok(image_samples)
 }
 
-fn load_mnist_labels(path: PathBuf) -> Result<Vec<Vec<f32>>, Box<dyn Error>> {
+fn load_mnist_labels(path: PathBuf) -> Result<Vec<Vec<Precision>>, Box<dyn Error>> {
     let mut labels = BufReader::new(File::open(path)?);
-    let mut magic_number = [0; 4];
-    labels.read(&mut magic_number)?;
-    if u32::from_be_bytes(magic_number) != 0x00000801 {
+    if read_u32(&mut labels)? != 0x00000801 {
         Err("Magic number does not match on labels file")?;
     }
-    let mut num_items = [0; 4];
-    labels.read(&mut num_items)?;
-    let _num_items = u32::from_be_bytes(num_items);
+    let _num_items = read_u32(&mut labels)?;
 
     labels
         .bytes()
@@ -91,10 +85,10 @@ struct Args {
     #[clap(short = 'i', long, default_value_t = 10_000)]
     steps: usize,
 
-    #[clap(short, long, default_value_t = 1e-6)]
+    #[clap(short, long, default_value_t = 1e-7)]
     temperature: Precision,
 
-    #[clap(short, long, default_value_t = 1e-6)]
+    #[clap(short, long, default_value_t = 1e-12)]
     epsilon: Precision,
 
     #[clap(short, long, default_value_t = 100)]
