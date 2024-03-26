@@ -2,6 +2,7 @@ use std::{
     error::Error,
     fs::File,
     io::{BufReader, BufWriter},
+    ops::Range,
     path::PathBuf,
 };
 
@@ -29,7 +30,7 @@ impl Model {
         Self { arch, weights }
     }
 
-    pub fn forward<A>(&self, features: Vec<Precision>) -> Vec<Precision>
+    pub fn forward<A>(&self, features: &Vec<Precision>) -> Vec<Vec<Precision>>
     where
         A: ActivationFunction,
     {
@@ -42,27 +43,98 @@ impl Model {
             );
         }
 
-        let mut activations = features;
+        let mut activations = vec![features.clone()];
         for (weights, &[from, _to]) in self.weights.iter().zip(self.arch.array_windows()) {
-            activations.push(1.0);
-            activations = weights
+            let boundary = activations.last_mut().unwrap();
+            boundary.push(1.0);
+            dbg!(weights.chunks(from + 1).collect::<Vec<_>>());
+            let next_boundary = weights
                 .chunks(from + 1)
                 .map(|weights| {
                     A::activate(
                         weights
                             .iter()
-                            .zip(&activations)
+                            .zip(&*boundary)
                             .map(|(weight, activation)| weight * activation)
                             .sum(),
                     )
                 })
                 .collect();
+            activations.push(next_boundary);
         }
 
         activations
     }
+
+    pub fn inference<A: ActivationFunction>(&self, features: &Vec<Precision>) -> Vec<Precision> {
+        self.forward::<A>(features).pop().unwrap()
+    }
+
+    pub fn backward<A: ActivationFunction>(
+        &self,
+        label: &Vec<Precision>,
+        mut activations: Vec<Vec<Precision>>,
+    ) -> Gradient {
+        let last_activation = activations.pop().unwrap();
+        let last_delta: Vec<_> = last_activation
+            .iter()
+            .zip(label)
+            .map(|(activation, label)| (activation - label) * A::derivative(*activation))
+            .collect();
+        dbg!(&last_delta);
+        let mut deltas = vec![last_delta];
+        dbg!(&activations);
+
+        for (activations, weights) in activations.into_iter().zip(&self.weights).rev() {
+            dbg!(&activations);
+            dbg!(weights);
+            let delta = deltas.last().unwrap();
+            dbg!(delta);
+            dbg!(weights
+                .transposed_chunks(weights.len() / deltas.len())
+                .collect::<Vec<_>>());
+            debug_assert_eq!(
+                weights
+                    .transposed_chunks(weights.len() / deltas.len())
+                    .count(),
+                activations.len()
+            );
+
+            let new_delta: Vec<Precision> = weights
+                .transposed_chunks(weights.len() / deltas.len())
+                .zip(activations)
+                .map(|(weights, activation)| {
+                    dbg!(&weights);
+                    dbg!(activation);
+                    // debug_assert_eq!(weights.len(), delta.len());
+                    let delta: Precision = weights
+                        .iter()
+                        .zip(delta)
+                        .map(|(&weight, delta)| weight * delta)
+                        .sum();
+                    dbg!(&delta);
+                    delta * A::derivative(activation)
+                })
+                .collect();
+            dbg!(&new_delta);
+            deltas.push(new_delta);
+        }
+
+        deltas.reverse();
+
+        Gradient(deltas)
+    }
+
+    pub fn forward_backward<A: ActivationFunction>(
+        &self,
+        Sample(features, label): &Sample,
+    ) -> Gradient {
+        let activations = self.forward::<A>(features);
+        self.backward::<A>(label, activations)
+    }
 }
 
+#[derive(Debug)]
 pub struct Gradient(Vec<Vec<Precision>>);
 
 pub struct Sample(pub Vec<Precision>, pub Vec<Precision>);
@@ -70,7 +142,7 @@ pub struct Sample(pub Vec<Precision>, pub Vec<Precision>);
 pub fn loss<A: ActivationFunction>(model: &Model, Sample(input, label): &Sample) -> Precision {
     label
         .iter()
-        .zip(model.forward::<A>(input.clone()))
+        .zip(model.inference::<A>(input))
         .map(|(&label, actual)| (label - actual).powi(2))
         .sum::<Precision>()
         / (label.len() * 2) as Precision
@@ -206,3 +278,99 @@ impl ActivationFunction for SiLu {
         (x - 1.0) / (x_exp + 1.0) - (x / (x_exp + 1.0).powi(2)) + 1.0
     }
 }
+
+pub struct TransposedChunks<'a, T> {
+    slice: &'a [T],
+    step: usize,
+    progress: Range<usize>,
+}
+
+impl<'a, T> Iterator for TransposedChunks<'a, T> {
+    type Item = Vec<&'a T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.progress
+            .next()
+            .map(|offset| self.slice.iter().skip(offset).step_by(self.step).collect())
+    }
+}
+
+pub trait AsTransposeChunks: Sized {
+    type Item;
+
+    fn transposed_chunks(&self, num_chunks: usize) -> TransposedChunks<Self::Item>;
+}
+
+impl<T> AsTransposeChunks for &[T] {
+    type Item = T;
+
+    fn transposed_chunks(&self, num_chunks: usize) -> TransposedChunks<Self::Item> {
+        let step = num_chunks;
+        TransposedChunks {
+            slice: self,
+            step,
+            progress: 0..step,
+        }
+    }
+}
+
+impl<T> AsTransposeChunks for &Vec<T> {
+    type Item = T;
+
+    fn transposed_chunks(&self, num_chunks: usize) -> TransposedChunks<Self::Item> {
+        let step = num_chunks;
+        TransposedChunks {
+            slice: self,
+            step,
+            progress: 0..step,
+        }
+    }
+}
+
+#[test]
+fn transposed_chunks() {
+    let a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    println!("chunks:");
+    for chunk in a.chunks(3) {
+        println!("{chunk:?}");
+    }
+    println!("transposed chunks:");
+    for chunk in (&a[..]).transposed_chunks(2) {
+        println!("{chunk:?}");
+    }
+}
+
+#[test]
+fn backprop() {
+    let mut model = Model {
+        arch: vec![
+            2,
+            2,
+            1,
+        ],
+        weights: vec![
+            vec![
+                0.4988102959636601,
+                0.9047553176084865,
+                0.5845558959510986,
+                0.3004672416053119,
+                0.6780994008327456,
+                0.42221830855443954,
+            ],
+            vec![
+                0.8067167072599537,
+                0.5558960863086262,
+                0.8891306385486438,
+            ],
+        ],
+    };
+    dbg!(&model);
+
+    let test_sample = Sample(vec![0.0, 1.0], vec![1.0]);
+
+    let (_, naive_gradient) = compute_gradient::<SiLu>(&mut model, &vec![&test_sample], 1e-12);
+    dbg!(naive_gradient);
+    let backprop_gradient = model.forward_backward::<SiLu>(&test_sample);
+    dbg!(backprop_gradient);
+}
+

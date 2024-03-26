@@ -150,7 +150,7 @@ fn inference(args: InferenceArgs) -> Result<(), Box<dyn Error>> {
     let model = load(args.model)?;
     dbg!(&model);
     println!("{:?}", args.input);
-    let output = model.forward::<SiLu>(args.input);
+    let output = model.forward::<SiLu>(&args.input);
     println!("{output:?}");
     Ok(())
 }
