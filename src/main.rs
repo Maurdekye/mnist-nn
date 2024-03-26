@@ -8,7 +8,7 @@ use std::{
     path::PathBuf,
 };
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 mod nn;
 
@@ -71,33 +71,7 @@ fn load_mnist(images: PathBuf, labels: PathBuf) -> Result<Vec<Sample>, Box<dyn E
         .collect())
 }
 
-#[derive(Parser)]
-struct Args {
-    #[clap(short = 'd', long, default_value = "mnist")]
-    mnist_data: PathBuf,
-
-    #[clap(short, long)]
-    model: Option<PathBuf>,
-
-    #[clap(short, long)]
-    save: PathBuf,
-
-    #[clap(short = 'i', long, default_value_t = 10_000)]
-    steps: usize,
-
-    #[clap(short, long, default_value_t = 1e-7)]
-    temperature: Precision,
-
-    #[clap(short, long, default_value_t = 1e-12)]
-    epsilon: Precision,
-
-    #[clap(short, long, default_value_t = 100)]
-    batch_size: usize,
-}
-
-fn main() -> Result<(), Box<dyn Error>> {
-    let args = Args::parse();
-
+fn train_mnist(args: TrainMnistArgs) -> Result<(), Box<dyn Error>> {
     let mut model = match args.model {
         Some(path) => {
             println!("Loadinging model from {}", path.to_string_lossy());
@@ -105,7 +79,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         None => {
             println!("Initializing new model");
-            Model::new(vec![784, 256, 10])
+            Model::new(vec![784, 32, 10])
         }
     };
 
@@ -122,7 +96,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         args.steps,
         args.epsilon,
         args.temperature,
-        args.batch_size,
+        Some(args.batch_size),
     );
     println!("Training finished");
 
@@ -132,4 +106,123 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Done");
 
     Ok(())
+}
+
+fn train_xor(args: TrainXorArgs) -> Result<(), Box<dyn Error>> {
+    let mut model = match args.model {
+        Some(path) => {
+            println!("Loadinging model from {}", path.to_string_lossy());
+            load(path)?
+        }
+        None => {
+            println!("Initializing new model");
+            Model::new(vec![2, 2, 1])
+        }
+    };
+
+    let samples = vec![
+        Sample(vec![0.0, 0.0], vec![0.0]),
+        Sample(vec![0.0, 1.0], vec![1.0]),
+        Sample(vec![1.0, 0.0], vec![1.0]),
+        Sample(vec![1.0, 1.0], vec![0.0]),
+    ];
+
+    println!("Beginning training");
+    train::<SiLu>(
+        &mut model,
+        &samples,
+        args.steps,
+        args.epsilon,
+        args.temperature,
+        None,
+    );
+    println!("Training finished");
+
+    println!("Saving model");
+    save(&model, args.save)?;
+
+    println!("Done");
+
+    Ok(())
+}
+
+fn inference(args: InferenceArgs) -> Result<(), Box<dyn Error>> {
+    let model = load(args.model)?;
+    dbg!(&model);
+    println!("{:?}", args.input);
+    let output = model.forward::<SiLu>(args.input);
+    println!("{output:?}");
+    Ok(())
+}
+
+#[derive(Parser)]
+struct Args {
+    #[clap(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    TrainMnist(TrainMnistArgs),
+    TrainXor(TrainXorArgs),
+    Inference(InferenceArgs),
+}
+
+#[derive(Parser)]
+struct TrainMnistArgs {
+    #[clap(short = 'd', long, default_value = "mnist")]
+    mnist_data: PathBuf,
+
+    #[clap(short, long)]
+    model: Option<PathBuf>,
+
+    #[clap(short, long)]
+    save: PathBuf,
+
+    #[clap(short = 'i', long, default_value_t = 1000)]
+    steps: usize,
+
+    #[clap(short, long, default_value_t = 1e-7)]
+    temperature: Precision,
+
+    #[clap(short, long, default_value_t = 1e-12)]
+    epsilon: Precision,
+
+    #[clap(short, long, default_value_t = 100)]
+    batch_size: usize,
+}
+
+#[derive(Parser)]
+struct TrainXorArgs {
+    #[clap(short, long)]
+    model: Option<PathBuf>,
+
+    #[clap(short, long)]
+    save: PathBuf,
+
+    #[clap(short = 'i', long, default_value_t = 1000)]
+    steps: usize,
+
+    #[clap(short, long, default_value_t = 1e-2)]
+    temperature: Precision,
+
+    #[clap(short, long, default_value_t = 1e-12)]
+    epsilon: Precision,
+}
+
+#[derive(Parser)]
+struct InferenceArgs {
+    model: PathBuf,
+
+    input: Vec<Precision>,
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let args = Args::parse();
+
+    match args.command {
+        Command::TrainMnist(args) => train_mnist(args),
+        Command::TrainXor(args) => train_xor(args),
+        Command::Inference(args) => inference(args),
+    }
 }
