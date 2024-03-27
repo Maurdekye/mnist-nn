@@ -2,6 +2,7 @@ use std::{
     error::Error,
     fs::File,
     io::{BufReader, BufWriter},
+    iter::zip,
     ops::Range,
     path::PathBuf,
 };
@@ -19,7 +20,7 @@ pub struct Model {
 
 impl Model {
     pub fn new(arch: Vec<usize>) -> Self {
-        let mut rng = thread_rng();
+        let mut rng = StdRng::seed_from_u64(0);
 
         let mut weights = Vec::new();
 
@@ -30,7 +31,10 @@ impl Model {
         Self { arch, weights }
     }
 
-    pub fn forward<A>(&self, features: &Vec<Precision>) -> Vec<Vec<Precision>>
+    pub fn forward<A>(
+        &self,
+        features: &Vec<Precision>,
+    ) -> (Vec<Precision>, Vec<Vec<Precision>>, Vec<Vec<Precision>>)
     where
         A: ActivationFunction,
     {
@@ -43,94 +47,139 @@ impl Model {
             );
         }
 
-        let mut activations = vec![features.clone()];
+        let mut network_inputs = Vec::new();
+        let mut network_outputs = Vec::new();
+        let mut activations = features.clone();
         for (weights, &[from, _to]) in self.weights.iter().zip(self.arch.array_windows()) {
-            let boundary = activations.last_mut().unwrap();
-            boundary.push(1.0);
-            dbg!(weights.chunks(from + 1).collect::<Vec<_>>());
-            let next_boundary = weights
+            activations.push(1.0);
+            network_outputs.push(activations.clone());
+            activations = weights
                 .chunks(from + 1)
                 .map(|weights| {
-                    A::activate(
-                        weights
-                            .iter()
-                            .zip(&*boundary)
-                            .map(|(weight, activation)| weight * activation)
-                            .sum(),
-                    )
+                    weights
+                        .iter()
+                        .zip(&*activations)
+                        .map(|(weight, activation)| weight * activation)
+                        .sum()
                 })
                 .collect();
-            activations.push(next_boundary);
+            network_inputs.push(activations.clone());
+            activations = activations.into_iter().map(A::activate).collect();
         }
 
-        activations
+        (activations, network_inputs, network_outputs)
     }
 
     pub fn inference<A: ActivationFunction>(&self, features: &Vec<Precision>) -> Vec<Precision> {
-        self.forward::<A>(features).pop().unwrap()
+        self.forward::<A>(features).0
     }
 
     pub fn backward<A: ActivationFunction>(
         &self,
         label: &Vec<Precision>,
-        mut activations: Vec<Vec<Precision>>,
-    ) -> Gradient {
-        let last_activation = activations.pop().unwrap();
-        let last_delta: Vec<_> = last_activation
-            .iter()
-            .zip(label)
-            .map(|(activation, label)| (activation - label) * A::derivative(*activation))
-            .collect();
-        dbg!(&last_delta);
-        let mut deltas = vec![last_delta];
-        dbg!(&activations);
-
-        for (activations, weights) in activations.into_iter().zip(&self.weights).rev() {
-            dbg!(&activations);
-            dbg!(weights);
-            let delta = deltas.last().unwrap();
-            dbg!(delta);
-            dbg!(weights
-                .transposed_chunks(weights.len() / deltas.len())
-                .collect::<Vec<_>>());
-            debug_assert_eq!(
-                weights
-                    .transposed_chunks(weights.len() / deltas.len())
-                    .count(),
-                activations.len()
-            );
-
-            let new_delta: Vec<Precision> = weights
-                .transposed_chunks(weights.len() / deltas.len())
-                .zip(activations)
-                .map(|(weights, activation)| {
-                    dbg!(&weights);
-                    dbg!(activation);
-                    // debug_assert_eq!(weights.len(), delta.len());
-                    let delta: Precision = weights
-                        .iter()
-                        .zip(delta)
-                        .map(|(&weight, delta)| weight * delta)
-                        .sum();
-                    dbg!(&delta);
-                    delta * A::derivative(activation)
-                })
+        output: &Vec<Precision>,
+        network_inputs: &Vec<Vec<Precision>>,
+        network_outputs: &Vec<Vec<Precision>>,
+    ) -> Vec<Vec<Precision>> {
+        dbg!(&self.weights);
+        dbg!(&output);
+        dbg!(&network_inputs);
+        dbg!(&network_outputs);
+        let mut gradients = Vec::new();
+        let mut delta: Vec<Precision> = Vec::new();
+        for (i, rev_i) in (0..self.weights.len()).zip((0..self.weights.len()).rev()) {
+            let d_activ: Vec<Precision> = network_inputs[rev_i]
+                .iter()
+                .map(|input| A::derivative(*input))
                 .collect();
-            dbg!(&new_delta);
-            deltas.push(new_delta);
+            dbg!(&d_activ);
+            let d_error: Vec<Precision> = if i == 0 {
+                label
+                    .iter()
+                    .zip(output)
+                    .map(|(label, output)| output - label)
+                    .collect()
+            } else {
+                (&self.weights[rev_i + 1])
+                    .transposed_chunks((&self.weights[rev_i + 1]).len() / delta.len())
+                    .take(d_activ.len())
+                    .map(|weights| {
+                        weights
+                            .iter()
+                            .zip(&delta)
+                            .map(|(&weight, delta)| weight * delta)
+                            .sum::<Precision>()
+                    })
+                    .collect()
+            };
+            dbg!(&d_error);
+            delta = d_activ
+                .into_iter()
+                .zip(d_error)
+                .map(|(activation, error)| activation * error)
+                .collect();
+            dbg!(&delta);
+            dbg!(&network_outputs[rev_i]);
+            let gradient: Vec<Precision> = delta
+                .iter()
+                .flat_map(|output| network_outputs[rev_i].iter().map(|delta| delta * *output))
+                .collect();
+            dbg!(&gradient);
+            gradients.push(gradient);
         }
 
-        deltas.reverse();
-
-        Gradient(deltas)
+        gradients.into_iter().rev().collect()
     }
 
     pub fn forward_backward<A: ActivationFunction>(
         &self,
         Sample(features, label): &Sample,
     ) -> Gradient {
-        let activations = self.forward::<A>(features);
-        self.backward::<A>(label, activations)
+        let (output, network_inputs, network_outputs) = self.forward::<A>(features);
+        let gradients = self.backward::<A>(label, &output, &network_inputs, &network_outputs);
+        Gradient(gradients)
+    }
+
+    fn print_params(&self) {
+        for i in 0..self.arch.len() {
+            println!();
+            let subtitle = if i == 0 {
+                " (input)"
+            } else if i == self.arch.len() - 1 {
+                " (output)"
+            } else {
+                ""
+            };
+            println!("Layer {i}{subtitle}:");
+            println!("Width: {}", self.arch[i]);
+            if i >= 1 {
+                self.print_weights(i - 1);
+            }
+        }
+    }
+
+    fn print_weights(&self, index: usize) {
+        println!("Weights:");
+        for chunk in self.weights[index].chunks(self.arch[index] + 1) {
+            println!(
+                "{}",
+                chunk[..chunk.len() - 1]
+                    .iter()
+                    .map(|weight| format!("{weight: <6.3}"))
+                    .collect::<Vec<_>>()
+                    .join("")
+            );
+        }
+        println!("Biases:");
+        println!(
+            "{}",
+            self.weights[index]
+                .chunks(self.arch[index] + 1)
+                .map(|chunk| chunk[chunk.len() - 1])
+                .map(|bias| format!("{bias: <6.3}"))
+                .collect::<Vec<_>>()
+                .join("")
+        );
     }
 }
 
@@ -342,35 +391,13 @@ fn transposed_chunks() {
 
 #[test]
 fn backprop() {
-    let mut model = Model {
-        arch: vec![
-            2,
-            2,
-            1,
-        ],
-        weights: vec![
-            vec![
-                0.4988102959636601,
-                0.9047553176084865,
-                0.5845558959510986,
-                0.3004672416053119,
-                0.6780994008327456,
-                0.42221830855443954,
-            ],
-            vec![
-                0.8067167072599537,
-                0.5558960863086262,
-                0.8891306385486438,
-            ],
-        ],
-    };
-    dbg!(&model);
+    let mut model = Model::new(vec![2, 2, 1]);
+    model.print_params();
 
     let test_sample = Sample(vec![0.0, 1.0], vec![1.0]);
 
     let (_, naive_gradient) = compute_gradient::<SiLu>(&mut model, &vec![&test_sample], 1e-12);
-    dbg!(naive_gradient);
     let backprop_gradient = model.forward_backward::<SiLu>(&test_sample);
+    dbg!(naive_gradient);
     dbg!(backprop_gradient);
 }
-
