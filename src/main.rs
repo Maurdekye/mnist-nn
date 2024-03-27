@@ -94,7 +94,6 @@ fn train_mnist(args: TrainMnistArgs) -> Result<(), Box<dyn Error>> {
         &mut model,
         &samples,
         args.steps,
-        args.epsilon,
         args.temperature,
         Some(args.batch_size),
     );
@@ -128,14 +127,7 @@ fn train_xor(args: TrainXorArgs) -> Result<(), Box<dyn Error>> {
     ];
 
     println!("Beginning training");
-    train::<SiLu>(
-        &mut model,
-        &samples,
-        args.steps,
-        args.epsilon,
-        args.temperature,
-        None,
-    );
+    train::<SiLu>(&mut model, &samples, args.steps, args.temperature, None);
     println!("Training finished");
 
     println!("Saving model");
@@ -150,7 +142,7 @@ fn inference(args: InferenceArgs) -> Result<(), Box<dyn Error>> {
     let model = load(args.model)?;
     dbg!(&model);
     println!("{:?}", args.input);
-    let output = model.forward::<SiLu>(&args.input);
+    let output = model.inference::<SiLu>(&args.input);
     println!("{output:?}");
     Ok(())
 }
@@ -185,9 +177,6 @@ struct TrainMnistArgs {
     #[clap(short, long, default_value_t = 1e-7)]
     temperature: Precision,
 
-    #[clap(short, long, default_value_t = 1e-12)]
-    epsilon: Precision,
-
     #[clap(short, long, default_value_t = 100)]
     batch_size: usize,
 }
@@ -205,9 +194,6 @@ struct TrainXorArgs {
 
     #[clap(short, long, default_value_t = 1e-2)]
     temperature: Precision,
-
-    #[clap(short, long, default_value_t = 1e-12)]
-    epsilon: Precision,
 }
 
 #[derive(Parser)]

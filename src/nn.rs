@@ -20,7 +20,7 @@ pub struct Model {
 
 impl Model {
     pub fn new(arch: Vec<usize>) -> Self {
-        let mut rng = StdRng::seed_from_u64(0);
+        let mut rng = thread_rng();
 
         let mut weights = Vec::new();
 
@@ -72,58 +72,6 @@ impl Model {
 
     pub fn inference<A: ActivationFunction>(&self, features: &Vec<Precision>) -> Vec<Precision> {
         self.forward::<A>(features).0
-    }
-
-    pub fn _backward<A: ActivationFunction>(
-        &self,
-        label: &Vec<Precision>,
-        output: &Vec<Precision>,
-        network_inputs: &Vec<Vec<Precision>>,
-        network_outputs: &Vec<Vec<Precision>>,
-    ) -> Vec<Vec<Precision>> {
-        let mut gradients = Vec::new();
-        let mut delta: Vec<Precision> = Vec::new();
-        for (i, rev_i) in (0..self.weights.len()).zip((0..self.weights.len()).rev()) {
-            let d_activ: Vec<Precision> = network_inputs[rev_i]
-                .iter()
-                .map(|input| A::derivative(*input))
-                .collect();
-            let d_error: Vec<Precision> = if i == 0 {
-                label
-                    .iter()
-                    .zip(output)
-                    .map(|(label, output)| output - label)
-                    .collect()
-            } else {
-                (&self.weights[rev_i + 1])
-                    .transposed_chunks((&self.weights[rev_i + 1]).len() / delta.len())
-                    .take(d_activ.len())
-                    .map(|weights| {
-                        weights
-                            .iter()
-                            .zip(&delta)
-                            .map(|(&weight, delta)| weight * delta)
-                            .sum::<Precision>()
-                    })
-                    .collect()
-            };
-            delta = d_activ
-                .into_iter()
-                .zip(d_error)
-                .map(|(activation, error)| activation * error)
-                .collect();
-            let gradient: Vec<Precision> = delta
-                .iter()
-                .flat_map(|delta| {
-                    network_outputs[rev_i]
-                        .iter()
-                        .map(move |&output| delta * output)
-                })
-                .collect();
-            gradients.push(gradient);
-        }
-
-        gradients.into_iter().rev().collect()
     }
 
     pub fn backward<A: ActivationFunction>(
@@ -183,10 +131,61 @@ impl Model {
     pub fn forward_backward<A: ActivationFunction>(
         &self,
         Sample(features, label): &Sample,
-    ) -> Gradient {
+    ) -> (Precision, Gradient) {
         let (output, network_inputs, network_outputs) = self.forward::<A>(features);
         let gradients = self.backward::<A>(label, &output, &network_inputs, &network_outputs);
-        Gradient(gradients)
+        let loss = label
+            .iter()
+            .zip(&output)
+            .map(|(&label, &actual)| (label - actual).powi(2))
+            .sum::<Precision>()
+            / (label.len() * 2) as Precision;
+        (loss, Gradient(gradients))
+    }
+
+    pub fn batch_forward_backward<A: ActivationFunction>(
+        &self,
+        samples: &Vec<&Sample>,
+    ) -> (Precision, Gradient) {
+        let (losses_sum, gradients_sum) = samples
+            .iter()
+            .map(|sample| self.forward_backward::<A>(sample))
+            .reduce(|(loss_a, gradient_a), (loss_b, gradient_b)| {
+                (
+                    loss_a + loss_b,
+                    Gradient(
+                        gradient_a
+                            .0
+                            .into_iter()
+                            .zip(gradient_b.0)
+                            .map(|(gradient_a, gradient_b)| {
+                                gradient_a
+                                    .into_iter()
+                                    .zip(gradient_b)
+                                    .map(|(a, b)| a + b)
+                                    .collect()
+                            })
+                            .collect(),
+                    ),
+                )
+            })
+            .unwrap();
+        let len_f = samples.len() as Precision;
+        (
+            losses_sum / len_f,
+            Gradient(
+                gradients_sum
+                    .0
+                    .into_iter()
+                    .map(|gradient| {
+                        gradient
+                            .into_iter()
+                            .map(|gradient| gradient / len_f)
+                            .collect()
+                    })
+                    .collect(),
+            ),
+        )
     }
 
     fn print_params(&self) {
@@ -254,7 +253,7 @@ pub fn batch_error<A: ActivationFunction>(model: &Model, samples: &Vec<&Sample>)
         / samples.len() as Precision
 }
 
-pub fn compute_gradient<A: ActivationFunction>(
+pub fn naive_gradient<A: ActivationFunction>(
     model: &mut Model,
     samples: &Vec<&Sample>,
     epsilon: Precision,
@@ -296,7 +295,6 @@ pub fn train<A: ActivationFunction>(
     model: &mut Model,
     samples: &Vec<Sample>,
     steps: usize,
-    epsilon: Precision,
     temperature: Precision,
     batch_size: Option<usize>,
 ) {
@@ -307,7 +305,8 @@ pub fn train<A: ActivationFunction>(
                 .collect(),
             None => samples.iter().collect(),
         };
-        let (loss, gradient) = compute_gradient::<A>(model, &batch, epsilon);
+        // let (loss, gradient) = naive_gradient::<A>(model, &batch, epsilon);
+        let (loss, gradient) = model.batch_forward_backward::<A>(&batch);
         apply_gradient::<A>(model, gradient, temperature);
         println!("step {i}: loss {loss}");
     }
@@ -445,8 +444,28 @@ fn backprop() {
 
     let test_sample = Sample(vec![0.0, 1.0], vec![1.0]);
 
-    let (_, naive_gradient) = compute_gradient::<SiLu>(&mut model, &vec![&test_sample], 1e-12);
-    let backprop_gradient = model.forward_backward::<SiLu>(&test_sample);
+    let (_, naive_gradient) = naive_gradient::<SiLu>(&mut model, &vec![&test_sample], 1e-12);
+    let (_, backprop_gradient) = model.forward_backward::<SiLu>(&test_sample);
     dbg!(naive_gradient);
     dbg!(backprop_gradient);
+}
+
+#[test]
+fn train_test() {
+    let samples = vec![
+        Sample(vec![0.0, 0.0], vec![0.0]),
+        Sample(vec![0.0, 1.0], vec![1.0]),
+        Sample(vec![1.0, 0.0], vec![1.0]),
+        Sample(vec![1.0, 1.0], vec![0.0]),
+    ];
+
+    let mut model = Model::new(vec![2, 2, 1]);
+
+    train::<SiLu>(
+        &mut model,
+        &samples,
+        10,
+        0.5,
+        None,
+    );
 }
