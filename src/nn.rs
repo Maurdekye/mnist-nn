@@ -74,17 +74,13 @@ impl Model {
         self.forward::<A>(features).0
     }
 
-    pub fn backward<A: ActivationFunction>(
+    pub fn _backward<A: ActivationFunction>(
         &self,
         label: &Vec<Precision>,
         output: &Vec<Precision>,
         network_inputs: &Vec<Vec<Precision>>,
         network_outputs: &Vec<Vec<Precision>>,
     ) -> Vec<Vec<Precision>> {
-        dbg!(&self.weights);
-        dbg!(&output);
-        dbg!(&network_inputs);
-        dbg!(&network_outputs);
         let mut gradients = Vec::new();
         let mut delta: Vec<Precision> = Vec::new();
         for (i, rev_i) in (0..self.weights.len()).zip((0..self.weights.len()).rev()) {
@@ -92,7 +88,6 @@ impl Model {
                 .iter()
                 .map(|input| A::derivative(*input))
                 .collect();
-            dbg!(&d_activ);
             let d_error: Vec<Precision> = if i == 0 {
                 label
                     .iter()
@@ -112,19 +107,73 @@ impl Model {
                     })
                     .collect()
             };
-            dbg!(&d_error);
             delta = d_activ
                 .into_iter()
                 .zip(d_error)
                 .map(|(activation, error)| activation * error)
                 .collect();
-            dbg!(&delta);
-            dbg!(&network_outputs[rev_i]);
             let gradient: Vec<Precision> = delta
                 .iter()
-                .flat_map(|output| network_outputs[rev_i].iter().map(|delta| delta * *output))
+                .flat_map(|delta| {
+                    network_outputs[rev_i]
+                        .iter()
+                        .map(move |&output| delta * output)
+                })
                 .collect();
-            dbg!(&gradient);
+            gradients.push(gradient);
+        }
+
+        gradients.into_iter().rev().collect()
+    }
+
+    pub fn backward<A: ActivationFunction>(
+        &self,
+        label: &Vec<Precision>,
+        output: &Vec<Precision>,
+        network_inputs: &Vec<Vec<Precision>>,
+        network_outputs: &Vec<Vec<Precision>>,
+    ) -> Vec<Vec<Precision>> {
+        let mut delta: Vec<Precision> = network_inputs
+            .last()
+            .unwrap()
+            .iter()
+            .zip(label)
+            .zip(output)
+            .map(|((&input, &label), &output)| A::derivative(input) * (output - label))
+            .collect();
+        let last_output = network_outputs.last().unwrap();
+        let mut gradients: Vec<Vec<Precision>> = vec![delta
+            .iter()
+            .flat_map(|output| last_output.iter().map(|delta| delta * *output))
+            .collect()];
+        for (((inputs, outputs), weights), &width) in network_inputs
+            .iter()
+            .rev()
+            .skip(1)
+            .zip(network_outputs.iter().rev().skip(1))
+            .zip(self.weights.iter().rev())
+            .zip(self.arch.iter().rev().skip(1))
+        {
+            delta = inputs
+                .iter()
+                .zip(
+                    weights
+                        .transposed_chunks(weights.len() / delta.len())
+                        .take(width)
+                        .map(|weights| {
+                            weights
+                                .iter()
+                                .zip(&delta)
+                                .map(|(&weight, delta)| weight * delta)
+                                .sum::<Precision>()
+                        }),
+                )
+                .map(|(&input, error)| A::derivative(input) * error)
+                .collect();
+            let gradient: Vec<Precision> = delta
+                .iter()
+                .flat_map(|delta| outputs.iter().map(move |&output| delta * output))
+                .collect();
             gradients.push(gradient);
         }
 
