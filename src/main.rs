@@ -140,7 +140,6 @@ fn train_xor(args: TrainXorArgs) -> Result<(), Box<dyn Error>> {
 
 fn inference(args: InferenceArgs) -> Result<(), Box<dyn Error>> {
     let model = load(args.model)?;
-    dbg!(&model);
     println!("{:?}", args.input);
     let output = model.inference::<SiLu>(&args.input);
     println!("{output:?}");

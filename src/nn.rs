@@ -2,12 +2,12 @@ use std::{
     error::Error,
     fs::File,
     io::{BufReader, BufWriter},
-    iter::zip,
     ops::Range,
     path::PathBuf,
+    time::Duration,
 };
 
-use progress_observer::reprint;
+use progress_observer::{reprint, Observer};
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 pub type Precision = f64;
@@ -188,6 +188,7 @@ impl Model {
         )
     }
 
+    #[allow(unused)]
     fn print_params(&self) {
         for i in 0..self.arch.len() {
             println!();
@@ -206,6 +207,7 @@ impl Model {
         }
     }
 
+    #[allow(unused)]
     fn print_weights(&self, index: usize) {
         println!("Weights:");
         for chunk in self.weights[index].chunks(self.arch[index] + 1) {
@@ -236,6 +238,7 @@ pub struct Gradient(Vec<Vec<Precision>>);
 
 pub struct Sample(pub Vec<Precision>, pub Vec<Precision>);
 
+#[allow(unused)]
 pub fn loss<A: ActivationFunction>(model: &Model, Sample(input, label): &Sample) -> Precision {
     label
         .iter()
@@ -245,6 +248,7 @@ pub fn loss<A: ActivationFunction>(model: &Model, Sample(input, label): &Sample)
         / (label.len() * 2) as Precision
 }
 
+#[allow(unused)]
 pub fn batch_error<A: ActivationFunction>(model: &Model, samples: &Vec<&Sample>) -> Precision {
     samples
         .iter()
@@ -253,6 +257,7 @@ pub fn batch_error<A: ActivationFunction>(model: &Model, samples: &Vec<&Sample>)
         / samples.len() as Precision
 }
 
+#[allow(unused)]
 pub fn naive_gradient<A: ActivationFunction>(
     model: &mut Model,
     samples: &Vec<&Sample>,
@@ -298,7 +303,10 @@ pub fn train<A: ActivationFunction>(
     temperature: Precision,
     batch_size: Option<usize>,
 ) {
-    for i in 0..steps {
+    for (i, should_print) in Observer::new(Duration::from_secs_f32(0.5))
+        .enumerate()
+        .take(steps)
+    {
         let batch: Vec<&Sample> = match batch_size {
             Some(batch_size) => samples
                 .choose_multiple(&mut thread_rng(), batch_size)
@@ -308,7 +316,9 @@ pub fn train<A: ActivationFunction>(
         // let (loss, gradient) = naive_gradient::<A>(model, &batch, epsilon);
         let (loss, gradient) = model.batch_forward_backward::<A>(&batch);
         apply_gradient::<A>(model, gradient, temperature);
-        println!("step {i}: loss {loss}");
+        if should_print {
+            println!("step {i}: loss {loss}");
+        }
     }
 }
 
@@ -461,11 +471,5 @@ fn train_test() {
 
     let mut model = Model::new(vec![2, 2, 1]);
 
-    train::<SiLu>(
-        &mut model,
-        &samples,
-        10,
-        0.5,
-        None,
-    );
+    train::<SiLu>(&mut model, &samples, 10, 0.5, None);
 }
