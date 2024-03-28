@@ -9,6 +9,7 @@ use std::{
 
 use progress_observer::{reprint, Observer};
 use rand::prelude::*;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 pub type Precision = f64;
 
@@ -149,9 +150,9 @@ impl Model {
         samples: &Vec<&Sample>,
     ) -> (Precision, Gradient) {
         let (losses_sum, gradients_sum) = samples
-            .iter()
+            .par_iter()
             .map(|sample| self.forward_backward::<A>(sample))
-            .reduce(|(loss_a, gradient_a), (loss_b, gradient_b)| {
+            .reduce_with(|(loss_a, gradient_a), (loss_b, gradient_b)| {
                 (
                     loss_a + loss_b,
                     Gradient(
