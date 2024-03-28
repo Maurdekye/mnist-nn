@@ -13,6 +13,7 @@ use clap::{Parser, Subcommand};
 mod nn;
 
 use nn::*;
+use progress_observer::reprint;
 
 fn read_u32<R: Read>(reader: &mut R) -> Result<u32, Box<dyn Error>> {
     let mut uint = [0; 4];
@@ -79,7 +80,7 @@ fn train_mnist(args: TrainMnistArgs) -> Result<(), Box<dyn Error>> {
         }
         None => {
             println!("Initializing new model");
-            Model::new(vec![784, 32, 10])
+            Model::new(vec![784, 256, 64, 10])
         }
     };
 
@@ -90,12 +91,29 @@ fn train_mnist(args: TrainMnistArgs) -> Result<(), Box<dyn Error>> {
     )?;
 
     println!("Beginning training");
+
     train::<SiLu>(
         &mut model,
         &samples,
         args.steps,
         args.temperature,
         Some(args.batch_size),
+        |model, i| {
+            if let Some(save_every) = args.save_every {
+                if i > 0 && i % save_every == 0 {
+                    println!("Saving checkpoint");
+                    let mut filename = args.save.clone();
+                    filename.set_file_name(format!(
+                        "{i}-{}",
+                        filename.file_name().unwrap().to_string_lossy()
+                    ));
+                    match save(&model, filename) {
+                        Ok(()) => println!("Checkpoint saved"),
+                        Err(err) => println!("Error saving checkpoint: {err}"),
+                    }
+                }
+            }
+        },
     );
     println!("Training finished");
 
@@ -127,13 +145,64 @@ fn train_xor(args: TrainXorArgs) -> Result<(), Box<dyn Error>> {
     ];
 
     println!("Beginning training");
-    train::<SiLu>(&mut model, &samples, args.steps, args.temperature, None);
+    train::<SiLu>(
+        &mut model,
+        &samples,
+        args.steps,
+        args.temperature,
+        None,
+        |_, _| {},
+    );
     println!("Training finished");
 
     println!("Saving model");
     save(&model, args.save)?;
 
     println!("Done");
+
+    Ok(())
+}
+
+fn test_mnist(args: TestMnistArgs) -> Result<(), Box<dyn Error>> {
+    let model = load(args.model)?;
+
+    println!("Loading testing data");
+    let samples = load_mnist(
+        args.mnist_data.join("t10k-images.idx3-ubyte"),
+        args.mnist_data.join("t10k-labels.idx1-ubyte"),
+    )?;
+    let num_samples = samples.len();
+
+    fn classify_label(output: &Vec<Precision>) -> usize {
+        output
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.total_cmp(b))
+            .map(|(i, _)| i)
+            .unwrap_or(0)
+    }
+
+    let mut hits = 0;
+    for (i, Sample(features, label)) in samples.iter().enumerate() {
+        let prediction = model.inference::<SiLu>(features);
+        let label_class = classify_label(label);
+        let prediction_class = classify_label(&prediction);
+        if label_class == prediction_class {
+            hits += 1;
+        }
+        if i % 100 == 0 {
+            reprint!(
+                "Classifying...{:.2}%",
+                (i as f32 / num_samples as f32) * 100.0
+            );
+        }
+    }
+    println!("\rClassifying done");
+
+    println!(
+        "{:.3}% accuracy out of {num_samples} test cases",
+        (hits as f32 / num_samples as f32) * 100.0
+    );
 
     Ok(())
 }
@@ -155,6 +224,7 @@ struct Args {
 #[derive(Subcommand)]
 enum Command {
     TrainMnist(TrainMnistArgs),
+    TestMnist(TestMnistArgs),
     TrainXor(TrainXorArgs),
     Inference(InferenceArgs),
 }
@@ -173,11 +243,22 @@ struct TrainMnistArgs {
     #[clap(short = 'i', long, default_value_t = 1000)]
     steps: usize,
 
+    #[clap(short, long)]
+    save_every: Option<usize>,
+
     #[clap(short, long, default_value_t = 1e-7)]
     temperature: Precision,
 
     #[clap(short, long, default_value_t = 100)]
     batch_size: usize,
+}
+
+#[derive(Parser)]
+struct TestMnistArgs {
+    model: PathBuf,
+
+    #[clap(short = 'd', long, default_value = "mnist")]
+    mnist_data: PathBuf,
 }
 
 #[derive(Parser)]
@@ -207,6 +288,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     match args.command {
         Command::TrainMnist(args) => train_mnist(args),
+        Command::TestMnist(args) => test_mnist(args),
         Command::TrainXor(args) => train_xor(args),
         Command::Inference(args) => inference(args),
     }

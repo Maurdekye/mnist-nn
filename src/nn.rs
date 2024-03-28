@@ -302,6 +302,7 @@ pub fn train<A: ActivationFunction>(
     steps: usize,
     temperature: Precision,
     batch_size: Option<usize>,
+    mut callback: impl FnMut(&mut Model, usize),
 ) {
     for (i, should_print) in Observer::new(Duration::from_secs_f32(0.5))
         .enumerate()
@@ -319,6 +320,8 @@ pub fn train<A: ActivationFunction>(
         if should_print {
             println!("step {i}: loss {loss}");
         }
+        callback(model, i);
+
     }
 }
 
@@ -471,5 +474,5 @@ fn train_test() {
 
     let mut model = Model::new(vec![2, 2, 1]);
 
-    train::<SiLu>(&mut model, &samples, 10, 0.5, None);
+    train::<SiLu>(&mut model, &samples, 10, 0.5, None, |_,_| {});
 }
