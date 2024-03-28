@@ -75,12 +75,12 @@ fn load_mnist(images: PathBuf, labels: PathBuf) -> Result<Vec<Sample>, Box<dyn E
 fn train_mnist(args: TrainMnistArgs) -> Result<(), Box<dyn Error>> {
     let mut model = match args.model {
         Some(path) => {
-            println!("Loadinging model from {}", path.to_string_lossy());
+            println!("Loading model from {}", path.to_string_lossy());
             load(path)?
         }
         None => {
             println!("Initializing new model");
-            Model::new(vec![784, 256, 64, 10])
+            Model::new(vec![784, 2000, 10])
         }
     };
 
@@ -97,7 +97,7 @@ fn train_mnist(args: TrainMnistArgs) -> Result<(), Box<dyn Error>> {
         &samples,
         args.steps,
         args.temperature,
-        Some(args.batch_size),
+        args.batch_size,
         |model, i| {
             if let Some(save_every) = args.save_every {
                 if i > 0 && i % save_every == 0 {
@@ -128,7 +128,7 @@ fn train_mnist(args: TrainMnistArgs) -> Result<(), Box<dyn Error>> {
 fn train_xor(args: TrainXorArgs) -> Result<(), Box<dyn Error>> {
     let mut model = match args.model {
         Some(path) => {
-            println!("Loadinging model from {}", path.to_string_lossy());
+            println!("Loading model from {}", path.to_string_lossy());
             load(path)?
         }
         None => {
@@ -249,8 +249,8 @@ struct TrainMnistArgs {
     #[clap(short, long, default_value_t = 1e-7)]
     temperature: Precision,
 
-    #[clap(short, long, default_value_t = 100)]
-    batch_size: usize,
+    #[clap(short, long)]
+    batch_size: Option<usize>,
 }
 
 #[derive(Parser)]

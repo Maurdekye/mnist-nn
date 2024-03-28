@@ -24,8 +24,14 @@ impl Model {
 
         let mut weights = Vec::new();
 
+        let bound = 1.0 / arch[0] as Precision;
+
         for &[x, y] in arch.array_windows() {
-            weights.push((0..((x + 1) * y)).map(|_| rng.gen()).collect());
+            weights.push(
+                (0..((x + 1) * y))
+                    .map(|_| ((rng.gen::<Precision>() * 2.0) - 1.0) * bound)
+                    .collect(),
+            );
         }
 
         Self { arch, weights }
@@ -284,7 +290,7 @@ pub fn naive_gradient<A: ActivationFunction>(
     (base_error, gradient)
 }
 
-pub fn apply_gradient<A: ActivationFunction>(
+pub fn apply_gradient(
     model: &mut Model,
     gradient: Gradient,
     temperature: Precision,
@@ -316,12 +322,11 @@ pub fn train<A: ActivationFunction>(
         };
         // let (loss, gradient) = naive_gradient::<A>(model, &batch, epsilon);
         let (loss, gradient) = model.batch_forward_backward::<A>(&batch);
-        apply_gradient::<A>(model, gradient, temperature);
-        if should_print {
+        apply_gradient(model, gradient, temperature);
+        if should_print || i < 10 {
             println!("step {i}: loss {loss}");
         }
         callback(model, i);
-
     }
 }
 
@@ -474,5 +479,5 @@ fn train_test() {
 
     let mut model = Model::new(vec![2, 2, 1]);
 
-    train::<SiLu>(&mut model, &samples, 10, 0.5, None, |_,_| {});
+    train::<SiLu>(&mut model, &samples, 10, 0.5, None, |_, _| {});
 }
