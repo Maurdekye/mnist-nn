@@ -37,6 +37,10 @@ impl Model {
         Self { arch, weights }
     }
 
+    pub fn arch(&self) -> &Vec<usize> {
+        &self.arch
+    }
+
     pub fn forward<A>(
         &self,
         features: &Vec<Precision>,
@@ -44,15 +48,7 @@ impl Model {
     where
         A: ActivationFunction,
     {
-        #[cfg(debug_assertions)]
-        if features.len() != self.arch[0] {
-            panic!(
-                "input feature vector is the wrong size: expected {}, got {}",
-                self.arch[0],
-                features.len()
-            );
-        }
-
+        debug_assert_eq!(features.len(), self.arch[0], "Input feature vector is the wrong size");
         let mut network_inputs = Vec::new();
         let mut network_outputs = Vec::new();
         let mut activations = features.clone();
@@ -124,11 +120,10 @@ impl Model {
                 )
                 .map(|(&input, error)| A::derivative(input) * error)
                 .collect();
-            let gradient: Vec<Precision> = delta
+            gradients.push(delta
                 .iter()
                 .flat_map(|delta| outputs.iter().map(move |&output| delta * output))
-                .collect();
-            gradients.push(gradient);
+                .collect());
         }
 
         gradients.into_iter().rev().collect()

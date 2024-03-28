@@ -76,11 +76,14 @@ fn train_mnist(args: TrainMnistArgs) -> Result<(), Box<dyn Error>> {
     let mut model = match args.model {
         Some(path) => {
             println!("Loading model from {}", path.to_string_lossy());
-            load(path)?
+            let model = load(path)?;
+            println!("Loaded model with architecture {:?}", model.arch());
+            model
         }
         None => {
-            println!("Initializing new model");
-            Model::new(vec![784, 2000, 10])
+            let arch = args.arch.unwrap_or_else(|| vec![784, 256, 10]);
+            println!("Initializing new model with architecture {arch:?}");
+            Model::new(arch)
         }
     };
 
@@ -236,6 +239,9 @@ struct TrainMnistArgs {
 
     #[clap(short, long)]
     model: Option<PathBuf>,
+
+    #[clap(short, long)]
+    arch: Option<Vec<usize>>,
 
     #[clap(short, long)]
     save: PathBuf,
