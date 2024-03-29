@@ -42,18 +42,28 @@ impl Model {
         &self.arch
     }
 
-    pub fn forward<A>(
+    pub fn forward<A, F>(
         &self,
         features: &Vec<Precision>,
     ) -> (Vec<Precision>, Vec<Vec<Precision>>, Vec<Vec<Precision>>)
     where
         A: ActivationFunction,
+        F: ActivationFunction,
     {
-        debug_assert_eq!(features.len(), self.arch[0], "Input feature vector is the wrong size");
+        debug_assert_eq!(
+            features.len(),
+            self.arch[0],
+            "Input feature vector is the wrong size"
+        );
         let mut network_inputs = Vec::new();
         let mut network_outputs = Vec::new();
         let mut activations = features.clone();
-        for (weights, &[from, _to]) in self.weights.iter().zip(self.arch.array_windows()) {
+        for (i, (weights, &[from, _to])) in self
+            .weights
+            .iter()
+            .zip(self.arch.array_windows())
+            .enumerate()
+        {
             activations.push(1.0);
             network_outputs.push(activations.clone());
             activations = weights
@@ -67,30 +77,42 @@ impl Model {
                 })
                 .collect();
             network_inputs.push(activations.clone());
-            activations = activations.into_iter().map(A::activate).collect();
+            let last_layer = i == self.arch.len() - 2;
+            activations = if last_layer {
+                activations.into_iter().map(F::activate).collect()
+            } else {
+                activations.into_iter().map(A::activate).collect()
+            };
         }
 
         (activations, network_inputs, network_outputs)
     }
 
-    pub fn inference<A: ActivationFunction>(&self, features: &Vec<Precision>) -> Vec<Precision> {
-        self.forward::<A>(features).0
+    pub fn inference<A: ActivationFunction, F: ActivationFunction>(
+        &self,
+        features: &Vec<Precision>,
+    ) -> Vec<Precision> {
+        self.forward::<A, F>(features).0
     }
 
-    pub fn backward<A: ActivationFunction>(
+    pub fn backward<A, F>(
         &self,
         label: &Vec<Precision>,
         output: &Vec<Precision>,
         network_inputs: &Vec<Vec<Precision>>,
         network_outputs: &Vec<Vec<Precision>>,
-    ) -> Vec<Vec<Precision>> {
+    ) -> Vec<Vec<Precision>>
+    where
+        A: ActivationFunction,
+        F: ActivationFunction,
+    {
         let mut delta: Vec<Precision> = network_inputs
             .last()
             .unwrap()
             .iter()
             .zip(label)
             .zip(output)
-            .map(|((&input, &label), &output)| A::derivative(input) * (output - label))
+            .map(|((&input, &label), &output)| F::derivative(input) * (output - label))
             .collect();
         let last_output = network_outputs.last().unwrap();
         let mut gradients: Vec<Vec<Precision>> = vec![delta
@@ -121,21 +143,24 @@ impl Model {
                 )
                 .map(|(&input, error)| A::derivative(input) * error)
                 .collect();
-            gradients.push(delta
-                .iter()
-                .flat_map(|delta| outputs.iter().map(move |&output| delta * output))
-                .collect());
+            gradients.push(
+                delta
+                    .iter()
+                    .flat_map(|delta| outputs.iter().map(move |&output| delta * output))
+                    .collect(),
+            );
         }
 
         gradients.into_iter().rev().collect()
     }
 
-    pub fn forward_backward<A: ActivationFunction>(
-        &self,
-        Sample(features, label): &Sample,
-    ) -> (Precision, Gradient) {
-        let (output, network_inputs, network_outputs) = self.forward::<A>(features);
-        let gradients = self.backward::<A>(label, &output, &network_inputs, &network_outputs);
+    pub fn forward_backward<A, F>(&self, Sample(features, label): &Sample) -> (Precision, Gradient)
+    where
+        A: ActivationFunction,
+        F: ActivationFunction,
+    {
+        let (output, network_inputs, network_outputs) = self.forward::<A, F>(features);
+        let gradients = self.backward::<A, F>(label, &output, &network_inputs, &network_outputs);
         let loss = label
             .iter()
             .zip(&output)
@@ -145,13 +170,14 @@ impl Model {
         (loss, Gradient(gradients))
     }
 
-    pub fn batch_forward_backward<A: ActivationFunction>(
-        &self,
-        samples: &Vec<&Sample>,
-    ) -> (Precision, Gradient) {
+    pub fn batch_forward_backward<A, F>(&self, samples: &Vec<&Sample>) -> (Precision, Gradient)
+    where
+        A: ActivationFunction,
+        F: ActivationFunction,
+    {
         let (losses_sum, gradients_sum) = samples
             .par_iter()
-            .map(|sample| self.forward_backward::<A>(sample))
+            .map(|sample| self.forward_backward::<A, F>(sample))
             .reduce_with(|(loss_a, gradient_a), (loss_b, gradient_b)| {
                 (
                     loss_a + loss_b,
@@ -241,32 +267,44 @@ pub struct Gradient(Vec<Vec<Precision>>);
 pub struct Sample(pub Vec<Precision>, pub Vec<Precision>);
 
 #[allow(unused)]
-pub fn loss<A: ActivationFunction>(model: &Model, Sample(input, label): &Sample) -> Precision {
+pub fn loss<A, F>(model: &Model, Sample(input, label): &Sample) -> Precision
+where
+    A: ActivationFunction,
+    F: ActivationFunction,
+{
     label
         .iter()
-        .zip(model.inference::<A>(input))
+        .zip(model.inference::<A, F>(input))
         .map(|(&label, actual)| (label - actual).powi(2))
         .sum::<Precision>()
         / (label.len() * 2) as Precision
 }
 
 #[allow(unused)]
-pub fn batch_error<A: ActivationFunction>(model: &Model, samples: &Vec<&Sample>) -> Precision {
+pub fn batch_error<A, F>(model: &Model, samples: &Vec<&Sample>) -> Precision
+where
+    A: ActivationFunction,
+    F: ActivationFunction,
+{
     samples
         .iter()
-        .map(|sample| loss::<A>(model, sample))
+        .map(|sample| loss::<A, F>(model, sample))
         .sum::<Precision>()
         / samples.len() as Precision
 }
 
 #[allow(unused)]
-pub fn naive_gradient<A: ActivationFunction>(
+pub fn naive_gradient<A, F>(
     model: &mut Model,
     samples: &Vec<&Sample>,
     epsilon: Precision,
-) -> (Precision, Gradient) {
+) -> (Precision, Gradient)
+where
+    A: ActivationFunction,
+    F: ActivationFunction,
+{
     let mut gradient = Gradient(Vec::new());
-    let base_error = batch_error::<A>(model, samples);
+    let base_error = batch_error::<A, F>(model, samples);
     for layer in 0..model.weights.len() {
         let mut layer_weight_gradients = vec![0.0; model.weights[layer].len()];
         for weight in 0..layer_weight_gradients.len() {
@@ -276,7 +314,7 @@ pub fn naive_gradient<A: ActivationFunction>(
             );
             let original_weight = model.weights[layer][weight];
             model.weights[layer][weight] += epsilon;
-            let nudged_error = batch_error::<A>(model, samples);
+            let nudged_error = batch_error::<A, F>(model, samples);
             model.weights[layer][weight] = original_weight;
             layer_weight_gradients[weight] = (nudged_error - base_error) / epsilon;
         }
@@ -286,11 +324,7 @@ pub fn naive_gradient<A: ActivationFunction>(
     (base_error, gradient)
 }
 
-pub fn apply_gradient(
-    model: &mut Model,
-    gradient: Gradient,
-    temperature: Precision,
-) {
+pub fn apply_gradient(model: &mut Model, gradient: Gradient, temperature: Precision) {
     for (model_weights, gradient_weights) in model.weights.iter_mut().zip(gradient.0) {
         for (model_weight, gradient_weight) in model_weights.iter_mut().zip(gradient_weights) {
             *model_weight -= gradient_weight * temperature;
@@ -298,14 +332,17 @@ pub fn apply_gradient(
     }
 }
 
-pub fn train<A: ActivationFunction>(
+pub fn train<A, F>(
     model: &mut Model,
     samples: &Vec<Sample>,
     steps: usize,
     temperature: Precision,
     batch_size: Option<usize>,
     mut callback: impl FnMut(&mut Model, usize),
-) {
+) where
+    A: ActivationFunction,
+    F: ActivationFunction,
+{
     for (i, should_print) in Observer::new(Duration::from_secs_f32(0.5))
         .enumerate()
         .take(steps)
@@ -317,7 +354,7 @@ pub fn train<A: ActivationFunction>(
             None => samples.iter().collect(),
         };
         // let (loss, gradient) = naive_gradient::<A>(model, &batch, epsilon);
-        let (loss, gradient) = model.batch_forward_backward::<A>(&batch);
+        let (loss, gradient) = model.batch_forward_backward::<A, F>(&batch);
         apply_gradient(model, gradient, temperature);
         if should_print || i < 10 {
             println!("step {i}: loss {loss}");
@@ -345,7 +382,6 @@ pub trait ActivationFunction {
     fn derivative(x: Precision) -> Precision;
 }
 
-#[derive(Serialize, Deserialize)]
 pub struct ReLu;
 impl ActivationFunction for ReLu {
     fn activate(x: Precision) -> Precision {
@@ -361,7 +397,6 @@ impl ActivationFunction for ReLu {
     }
 }
 
-#[derive(Serialize, Deserialize)]
 pub struct LeakyReLu;
 impl ActivationFunction for LeakyReLu {
     fn activate(x: Precision) -> Precision {
@@ -377,7 +412,18 @@ impl ActivationFunction for LeakyReLu {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+pub struct Sigmoid;
+impl ActivationFunction for Sigmoid {
+    fn activate(x: Precision) -> Precision {
+        1.0 / (1.0 + (-x).exp())
+    }
+
+    fn derivative(x: Precision) -> Precision {
+        let x_nexp = (-x).exp();
+        x_nexp / (1.0 + x_nexp).powi(2)
+    }
+}
+
 pub struct SiLu;
 impl ActivationFunction for SiLu {
     fn activate(x: Precision) -> Precision {
@@ -385,8 +431,8 @@ impl ActivationFunction for SiLu {
     }
 
     fn derivative(x: Precision) -> Precision {
-        let x_exp = x.exp();
-        (x - 1.0) / (x_exp + 1.0) - (x / (x_exp + 1.0).powi(2)) + 1.0
+        let x_exp_1 = x.exp() + 1.0;
+        (x - 1.0) / x_exp_1 - x / x_exp_1.powi(2) + 1.0
     }
 }
 
@@ -458,8 +504,8 @@ fn backprop() {
 
     let test_sample = Sample(vec![0.0, 1.0], vec![1.0]);
 
-    let (_, naive_gradient) = naive_gradient::<SiLu>(&mut model, &vec![&test_sample], 1e-12);
-    let (_, backprop_gradient) = model.forward_backward::<SiLu>(&test_sample);
+    let (_, naive_gradient) = naive_gradient::<SiLu, Sigmoid>(&mut model, &vec![&test_sample], 1e-12);
+    let (_, backprop_gradient) = model.forward_backward::<SiLu, Sigmoid>(&test_sample);
     dbg!(naive_gradient);
     dbg!(backprop_gradient);
 }
@@ -475,5 +521,5 @@ fn train_test() {
 
     let mut model = Model::new(vec![2, 2, 1]);
 
-    train::<SiLu>(&mut model, &samples, 10, 0.5, None, |_, _| {});
+    train::<SiLu, Sigmoid>(&mut model, &samples, 10, 0.5, None, |_, _| {});
 }

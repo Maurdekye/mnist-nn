@@ -95,7 +95,7 @@ fn train_mnist(args: TrainMnistArgs) -> Result<(), Box<dyn Error>> {
 
     println!("Beginning training");
 
-    train::<SiLu>(
+    train::<SiLu, Sigmoid>(
         &mut model,
         &samples,
         args.steps,
@@ -148,7 +148,7 @@ fn train_xor(args: TrainXorArgs) -> Result<(), Box<dyn Error>> {
     ];
 
     println!("Beginning training");
-    train::<SiLu>(
+    train::<SiLu, Sigmoid>(
         &mut model,
         &samples,
         args.steps,
@@ -187,7 +187,7 @@ fn test_mnist(args: TestMnistArgs) -> Result<(), Box<dyn Error>> {
 
     let mut hits = 0;
     for (i, Sample(features, label)) in samples.iter().enumerate() {
-        let prediction = model.inference::<SiLu>(features);
+        let prediction = model.inference::<SiLu, Sigmoid>(features);
         let label_class = classify_label(label);
         let prediction_class = classify_label(&prediction);
         if label_class == prediction_class {
@@ -213,7 +213,7 @@ fn test_mnist(args: TestMnistArgs) -> Result<(), Box<dyn Error>> {
 fn inference(args: InferenceArgs) -> Result<(), Box<dyn Error>> {
     let model = load(args.model)?;
     println!("{:?}", args.input);
-    let output = model.inference::<SiLu>(&args.input);
+    let output = model.inference::<SiLu, Sigmoid>(&args.input);
     println!("{output:?}");
     Ok(())
 }
