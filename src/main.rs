@@ -6,14 +6,18 @@ use std::{
     fs::File,
     io::{BufReader, Read},
     path::PathBuf,
+    time::Duration,
 };
 
 use clap::{Parser, Subcommand, ValueEnum};
 
 mod nn;
 
+use csv::Writer;
 use nn::*;
+use progress_observer::Observer;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use serde::Serialize;
 use std::fmt::Display;
 
 fn read_u32<R: Read>(reader: &mut R) -> Result<u32, Box<dyn Error>> {
@@ -87,7 +91,18 @@ fn load_mnist_testing(base_path: PathBuf) -> Result<Vec<Sample>, Box<dyn Error>>
     )
 }
 
+#[derive(Serialize)]
+struct TrainingLogRecord {
+    iteration: usize,
+    loss: Precision,
+}
+
 fn train_mnist(args: TrainMnistArgs) -> Result<(), Box<dyn Error>> {
+    let mut logfile = args
+        .logfile
+        .map(|logfile| Writer::from_path(logfile))
+        .transpose()?;
+
     let mut model = match args.model {
         Some(path) => {
             println!("Loading model from {}", path.to_string_lossy());
@@ -107,19 +122,33 @@ fn train_mnist(args: TrainMnistArgs) -> Result<(), Box<dyn Error>> {
 
     println!("Beginning training");
 
+    let mut observer = Observer::new(Duration::from_secs_f32(0.5));
     train::<SiLu, Sigmoid>(
         &mut model,
         &samples,
         args.steps,
         args.temperature,
         args.batch_size,
-        |model, i| {
+        |TrainingProgress {
+             iteration,
+             model,
+             gradient: _,
+             loss,
+         }| {
+            if observer.tick() {
+                println!("iteration {iteration}: loss {loss}");
+            }
+            if let Some(logfile) = &mut logfile {
+                logfile
+                    .serialize(TrainingLogRecord { iteration, loss })
+                    .expect("Error saving to log file");
+            }
             if let Some(save_every) = args.save_every {
-                if i > 0 && i % save_every == 0 {
+                if iteration > 0 && iteration % save_every == 0 {
                     println!("Saving checkpoint");
                     let mut filename = args.save.clone();
                     filename.set_file_name(format!(
-                        "{i}-{}",
+                        "{iteration}-{}",
                         filename.file_name().unwrap().to_string_lossy()
                     ));
                     match save(&model, filename) {
@@ -166,7 +195,7 @@ fn train_xor(args: TrainXorArgs) -> Result<(), Box<dyn Error>> {
         args.steps,
         args.temperature,
         None,
-        |_, _| {},
+        |_| {},
     );
     println!("Training finished");
 
@@ -295,6 +324,9 @@ struct TrainMnistArgs {
 
     #[clap(short, long)]
     batch_size: Option<usize>,
+
+    #[clap(short, long)]
+    logfile: Option<PathBuf>,
 }
 
 #[derive(Parser)]

@@ -4,10 +4,9 @@ use std::{
     io::{BufReader, BufWriter},
     ops::Range,
     path::PathBuf,
-    time::Duration,
 };
 
-use progress_observer::{reprint, Observer};
+use progress_observer::reprint;
 use rand::prelude::*;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -332,34 +331,39 @@ pub fn apply_gradient(model: &mut Model, gradient: Gradient, temperature: Precis
     }
 }
 
+pub struct TrainingProgress<'a> {
+    pub iteration: usize,
+    pub model: &'a mut Model,
+    pub gradient: &'a Gradient,
+    pub loss: Precision,
+}
+
 pub fn train<A, F>(
     model: &mut Model,
     samples: &Vec<Sample>,
     steps: usize,
     temperature: Precision,
     batch_size: Option<usize>,
-    mut callback: impl FnMut(&mut Model, usize),
+    mut callback: impl FnMut(TrainingProgress<'_>),
 ) where
     A: ActivationFunction,
     F: ActivationFunction,
 {
-    for (i, should_print) in Observer::new(Duration::from_secs_f32(0.5))
-        .enumerate()
-        .take(steps)
-    {
+    for i in 0..steps {
         let batch: Vec<&Sample> = match batch_size {
             Some(batch_size) => samples
                 .choose_multiple(&mut thread_rng(), batch_size)
                 .collect(),
             None => samples.iter().collect(),
         };
-        // let (loss, gradient) = naive_gradient::<A>(model, &batch, epsilon);
         let (loss, gradient) = model.batch_forward_backward::<A, F>(&batch);
+        callback(TrainingProgress {
+            iteration: i,
+            model,
+            gradient: &gradient,
+            loss,
+        });
         apply_gradient(model, gradient, temperature);
-        if should_print || i < 10 {
-            println!("step {i}: loss {loss}");
-        }
-        callback(model, i);
     }
 }
 
@@ -504,7 +508,8 @@ fn backprop() {
 
     let test_sample = Sample(vec![0.0, 1.0], vec![1.0]);
 
-    let (_, naive_gradient) = naive_gradient::<SiLu, Sigmoid>(&mut model, &vec![&test_sample], 1e-12);
+    let (_, naive_gradient) =
+        naive_gradient::<SiLu, Sigmoid>(&mut model, &vec![&test_sample], 1e-12);
     let (_, backprop_gradient) = model.forward_backward::<SiLu, Sigmoid>(&test_sample);
     dbg!(naive_gradient);
     dbg!(backprop_gradient);
@@ -521,5 +526,5 @@ fn train_test() {
 
     let mut model = Model::new(vec![2, 2, 1]);
 
-    train::<SiLu, Sigmoid>(&mut model, &samples, 10, 0.5, None, |_, _| {});
+    train::<SiLu, Sigmoid>(&mut model, &samples, 10, 0.5, None, |_| {});
 }
