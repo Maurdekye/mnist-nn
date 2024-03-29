@@ -1,20 +1,14 @@
 #![feature(array_windows)]
 #![feature(iterator_try_collect)]
 
-use std::{
-    error::Error,
-    fs::File,
-    io::{BufReader, Read},
-    path::PathBuf,
-};
+use std::{error::Error, fs::File, io::Read, path::PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
 
 mod nn;
 
 use nn::*;
-use progress_observer::reprint;
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::fmt::Display;
 
 fn read_u32<R: Read>(reader: &mut R) -> Result<u32, Box<dyn Error>> {
@@ -24,7 +18,7 @@ fn read_u32<R: Read>(reader: &mut R) -> Result<u32, Box<dyn Error>> {
 }
 
 fn load_mnist_images(path: PathBuf) -> Result<Vec<Vec<Precision>>, Box<dyn Error>> {
-    let mut images = BufReader::new(File::open(path)?);
+    let mut images = File::open(path)?;
     if read_u32(&mut images)? != 0x00000803 {
         Err("Magic number does not match on images file")?;
     }
@@ -36,7 +30,7 @@ fn load_mnist_images(path: PathBuf) -> Result<Vec<Vec<Precision>>, Box<dyn Error
     for _ in 0..num_items {
         let mut image = vec![0; (width * height) as usize];
         images.read(&mut image)?;
-        let sample = image
+        let sample: Vec<Precision> = image
             .into_iter()
             .map(|opacity| (opacity as Precision) / 255.0)
             .collect();
@@ -47,7 +41,7 @@ fn load_mnist_images(path: PathBuf) -> Result<Vec<Vec<Precision>>, Box<dyn Error
 }
 
 fn load_mnist_labels(path: PathBuf) -> Result<Vec<Vec<Precision>>, Box<dyn Error>> {
-    let mut labels = BufReader::new(File::open(path)?);
+    let mut labels = File::open(path)?;
     if read_u32(&mut labels)? != 0x00000801 {
         Err("Magic number does not match on labels file")?;
     }
