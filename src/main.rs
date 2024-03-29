@@ -142,6 +142,7 @@ fn train_mnist(args: TrainMnistArgs) -> Result<(), Box<dyn Error>> {
                 logfile
                     .serialize(TrainingLogRecord { iteration, loss })
                     .expect("Error saving to log file");
+                logfile.flush().unwrap();
             }
             if let Some(save_every) = args.save_every {
                 if iteration > 0 && iteration % save_every == 0 {
