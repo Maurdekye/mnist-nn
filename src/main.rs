@@ -8,12 +8,14 @@ use std::{
     path::PathBuf,
 };
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 mod nn;
 
 use nn::*;
 use progress_observer::reprint;
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use std::fmt::Display;
 
 fn read_u32<R: Read>(reader: &mut R) -> Result<u32, Box<dyn Error>> {
     let mut uint = [0; 4];
@@ -72,6 +74,20 @@ fn load_mnist(images: PathBuf, labels: PathBuf) -> Result<Vec<Sample>, Box<dyn E
         .collect())
 }
 
+fn load_mnist_training(base_path: PathBuf) -> Result<Vec<Sample>, Box<dyn Error>> {
+    load_mnist(
+        base_path.join("train-images.idx3-ubyte"),
+        base_path.join("train-labels.idx1-ubyte"),
+    )
+}
+
+fn load_mnist_testing(base_path: PathBuf) -> Result<Vec<Sample>, Box<dyn Error>> {
+    load_mnist(
+        base_path.join("t10k-images.idx3-ubyte"),
+        base_path.join("t10k-labels.idx1-ubyte"),
+    )
+}
+
 fn train_mnist(args: TrainMnistArgs) -> Result<(), Box<dyn Error>> {
     let mut model = match args.model {
         Some(path) => {
@@ -88,10 +104,7 @@ fn train_mnist(args: TrainMnistArgs) -> Result<(), Box<dyn Error>> {
     };
 
     println!("Loading training data");
-    let samples = load_mnist(
-        args.mnist_data.join("train-images.idx3-ubyte"),
-        args.mnist_data.join("train-labels.idx1-ubyte"),
-    )?;
+    let samples = load_mnist_training(args.mnist_data)?;
 
     println!("Beginning training");
 
@@ -166,46 +179,72 @@ fn train_xor(args: TrainXorArgs) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn classify_label(output: &Vec<Precision>) -> usize {
+    output
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.total_cmp(b))
+        .map(|(i, _)| i)
+        .unwrap_or(0)
+}
+
 fn test_mnist(args: TestMnistArgs) -> Result<(), Box<dyn Error>> {
     let model = load(args.model)?;
 
     println!("Loading testing data");
-    let samples = load_mnist(
-        args.mnist_data.join("t10k-images.idx3-ubyte"),
-        args.mnist_data.join("t10k-labels.idx1-ubyte"),
-    )?;
+    let samples = load_mnist_testing(args.mnist_data)?;
     let num_samples = samples.len();
 
-    fn classify_label(output: &Vec<Precision>) -> usize {
-        output
-            .iter()
-            .enumerate()
-            .max_by(|(_, a), (_, b)| a.total_cmp(b))
-            .map(|(i, _)| i)
-            .unwrap_or(0)
-    }
-
-    let mut hits = 0;
-    for (i, Sample(features, label)) in samples.iter().enumerate() {
-        let prediction = model.inference::<SiLu, Sigmoid>(features);
-        let label_class = classify_label(label);
-        let prediction_class = classify_label(&prediction);
-        if label_class == prediction_class {
-            hits += 1;
-        }
-        if i % 100 == 0 {
-            reprint!(
-                "Classifying...{:.2}%",
-                (i as f32 / num_samples as f32) * 100.0
-            );
-        }
-    }
+    println!("Classifying...");
+    let hits = samples
+        .par_iter()
+        .filter(|Sample(features, label)| {
+            let prediction = model.inference::<SiLu, Sigmoid>(features);
+            let label_class = classify_label(label);
+            let prediction_class = classify_label(&prediction);
+            label_class == prediction_class
+        })
+        .count();
     println!("\rClassifying done");
 
     println!(
         "{:.3}% accuracy out of {num_samples} test cases",
         (hits as f32 / num_samples as f32) * 100.0
     );
+
+    Ok(())
+}
+
+fn visualize_mnist(args: VisualizeMnistArgs) -> Result<(), Box<dyn Error>> {
+    let dataset = match args.datatset {
+        DatasetType::Train => load_mnist_training(args.mnist_data),
+        DatasetType::Test => load_mnist_testing(args.mnist_data),
+    }?;
+
+    let Some(Sample(features, label)) = dataset.get(args.sample) else {
+        Err(format!("Sample '{}' out of range", args.sample))?
+    };
+
+    println!("{} sample #{}:", args.datatset, args.sample);
+    println!("Features:");
+    for row in features.chunks(28) {
+        println!(
+            "{}",
+            row.iter()
+                .map(|&cell| match cell {
+                    _ if cell > 0.75 => "#",
+                    _ if cell > 0.50 => "+",
+                    _ if cell > 0.25 => ".",
+                    _ => " ",
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        );
+    }
+
+    let label = classify_label(label);
+    println!("Label: {label}");
+    dbg!(features.len());
 
     Ok(())
 }
@@ -228,6 +267,7 @@ struct Args {
 enum Command {
     TrainMnist(TrainMnistArgs),
     TestMnist(TestMnistArgs),
+    VisualizeMnist(VisualizeMnistArgs),
     TrainXor(TrainXorArgs),
     Inference(InferenceArgs),
 }
@@ -267,6 +307,28 @@ struct TestMnistArgs {
     mnist_data: PathBuf,
 }
 
+#[derive(ValueEnum, Clone)]
+enum DatasetType {
+    Train,
+    Test,
+}
+
+impl Display for DatasetType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_possible_value().unwrap().get_name())
+    }
+}
+
+#[derive(Parser)]
+struct VisualizeMnistArgs {
+    #[clap(short = 'd', long, default_value = "mnist")]
+    mnist_data: PathBuf,
+
+    datatset: DatasetType,
+
+    sample: usize,
+}
+
 #[derive(Parser)]
 struct TrainXorArgs {
     #[clap(short, long)]
@@ -295,6 +357,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     match args.command {
         Command::TrainMnist(args) => train_mnist(args),
         Command::TestMnist(args) => test_mnist(args),
+        Command::VisualizeMnist(args) => visualize_mnist(args),
         Command::TrainXor(args) => train_xor(args),
         Command::Inference(args) => inference(args),
     }
