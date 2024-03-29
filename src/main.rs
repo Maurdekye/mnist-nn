@@ -4,7 +4,7 @@
 use std::{
     error::Error,
     fs::File,
-    io::{BufReader, Read},
+    io::{self, BufReader, Read},
     path::PathBuf,
     time::Duration,
 };
@@ -35,18 +35,14 @@ fn load_mnist_images(path: PathBuf) -> Result<Vec<Vec<Precision>>, Box<dyn Error
     let height = read_u32(&mut images)?;
     let width = read_u32(&mut images)?;
 
-    let mut image_samples = Vec::new();
-    for _ in 0..num_items {
-        let mut image = vec![0; (width * height) as usize];
-        images.read_exact(&mut image)?;
-        let sample: Vec<Precision> = image
-            .into_iter()
-            .map(|opacity| (opacity as Precision) / 255.0)
-            .collect();
-        image_samples.push(sample);
-    }
-
-    Ok(image_samples)
+    let mut bytes = images.bytes();
+    Ok((0..num_items)
+        .map(|_| {
+            Iterator::take(&mut bytes, (width * height) as usize)
+                .map(|opacity| Ok::<_, io::Error>((opacity? as Precision) / 255.0))
+                .try_collect()
+        })
+        .try_collect()?)
 }
 
 fn load_mnist_labels(path: PathBuf) -> Result<Vec<Vec<Precision>>, Box<dyn Error>> {
