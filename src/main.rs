@@ -1,7 +1,12 @@
 #![feature(array_windows)]
 #![feature(iterator_try_collect)]
 
-use std::{error::Error, fs::File, io::Read, path::PathBuf};
+use std::{
+    error::Error,
+    fs::File,
+    io::{BufReader, Read},
+    path::PathBuf,
+};
 
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -13,12 +18,12 @@ use std::fmt::Display;
 
 fn read_u32<R: Read>(reader: &mut R) -> Result<u32, Box<dyn Error>> {
     let mut uint = [0; 4];
-    reader.read(&mut uint)?;
+    reader.read_exact(&mut uint)?;
     Ok(u32::from_be_bytes(uint))
 }
 
 fn load_mnist_images(path: PathBuf) -> Result<Vec<Vec<Precision>>, Box<dyn Error>> {
-    let mut images = File::open(path)?;
+    let mut images = BufReader::new(File::open(path)?);
     if read_u32(&mut images)? != 0x00000803 {
         Err("Magic number does not match on images file")?;
     }
@@ -29,7 +34,7 @@ fn load_mnist_images(path: PathBuf) -> Result<Vec<Vec<Precision>>, Box<dyn Error
     let mut image_samples = Vec::new();
     for _ in 0..num_items {
         let mut image = vec![0; (width * height) as usize];
-        images.read(&mut image)?;
+        images.read_exact(&mut image)?;
         let sample: Vec<Precision> = image
             .into_iter()
             .map(|opacity| (opacity as Precision) / 255.0)
@@ -41,7 +46,7 @@ fn load_mnist_images(path: PathBuf) -> Result<Vec<Vec<Precision>>, Box<dyn Error
 }
 
 fn load_mnist_labels(path: PathBuf) -> Result<Vec<Vec<Precision>>, Box<dyn Error>> {
-    let mut labels = File::open(path)?;
+    let mut labels = BufReader::new(File::open(path)?);
     if read_u32(&mut labels)? != 0x00000801 {
         Err("Magic number does not match on labels file")?;
     }
@@ -238,7 +243,6 @@ fn visualize_mnist(args: VisualizeMnistArgs) -> Result<(), Box<dyn Error>> {
 
     let label = classify_label(label);
     println!("Label: {label}");
-    dbg!(features.len());
 
     Ok(())
 }
