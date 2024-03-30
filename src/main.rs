@@ -14,6 +14,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 mod nn;
 
 use csv::Writer;
+use itertools::Itertools;
 use nn::*;
 use progress_observer::Observer;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
@@ -35,10 +36,13 @@ fn load_mnist_images(path: PathBuf) -> Result<Vec<Vec<Precision>>, Box<dyn Error
     let height = read_u32(&mut images)?;
     let width = read_u32(&mut images)?;
 
-    let mut bytes = images.bytes();
-    Ok((0..num_items)
-        .map(|_| {
-            Iterator::take(&mut bytes, (width * height) as usize)
+    Ok(images
+        .bytes()
+        .chunks((width * height) as usize)
+        .into_iter()
+        .take(num_items as usize)
+        .map(|chunk| {
+            chunk
                 .map(|opacity| Ok::<_, io::Error>((opacity? as Precision) / 255.0))
                 .try_collect()
         })
@@ -50,14 +54,14 @@ fn load_mnist_labels(path: PathBuf) -> Result<Vec<Vec<Precision>>, Box<dyn Error
     if read_u32(&mut labels)? != 0x00000801 {
         Err("Magic number does not match on labels file")?;
     }
-    let _num_items = read_u32(&mut labels)?;
+    let num_items = read_u32(&mut labels)?;
 
     labels
         .bytes()
+        .take(num_items as usize)
         .map(|label| {
-            let label = label?;
             let mut label_vector = vec![0.0; 10];
-            label_vector[label as usize] = 1.0;
+            label_vector[label? as usize] = 1.0;
             Ok(label_vector)
         })
         .try_collect()

@@ -9,6 +9,7 @@ edition = "2021"
 bincode = "1.3.3"
 clap = { version = "4.5.3", features = ["derive"] }
 csv = "1.3.0"
+itertools = "0.12.1"
 progress-observer = "3.2.0"
 rand = "0.8.5"
 rayon = "1.10.0"
